@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DHT22 Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #e8f5e9; /* light green background */
+      color: #1b5e20; /* dark green text */
+      text-align: center;
+      padding: 20px;
+    }
+    h2 {
+      color: #1b5e20;
+      margin-bottom: 20px;
+    }
+    .charts {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .chart-container {
+      flex: 1;
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .latest-values {
+      font-size: 1.1em;
+      margin-bottom: 10px;
+      color: #2e7d32;
+    }
+    canvas {
+      width: 100% !important;
+      height: 250px !important;
+    }
+  </style>
+</head>
+<body>
+  <h2>DHT22 Temperature & Humidity Monitor</h2>
+
+  <div class="charts">
+    <!-- Temperature chart on the left -->
+    <div class="chart-container">
+      <div class="latest-values">
+        🌡️ Temperature: <b id="temp">-- °C</b>
+      </div>
+      <canvas id="tempChart"></canvas>
+    </div>
+
+    <!-- Humidity chart on the right -->
+    <div class="chart-container">
+      <div class="latest-values">
+        💧 Humidity: <b id="hum">-- %</b>
+      </div>
+      <canvas id="humChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const tempCtx = document.getElementById('tempChart').getContext('2d');
+    const humCtx = document.getElementById('humChart').getContext('2d');
+
+    // Temperature Chart
+    const tempChart = new Chart(tempCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Temperature (°C)',
+          borderColor: 'red',
+          backgroundColor: 'rgba(255,99,132,0.2)',
+          data: [],
+          fill: true,
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#1b5e20' } } },
+        scales: {
+          x: { ticks: { color: '#1b5e20' } },
+          y: { ticks: { color: '#1b5e20' } }
+        }
+      }
+    });
+
+    // Humidity Chart
+    const humChart = new Chart(humCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Humidity (%)',
+          borderColor: 'blue',
+          backgroundColor: 'rgba(54,162,235,0.2)',
+          data: [],
+          fill: true,
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#1b5e20' } } },
+        scales: {
+          x: { ticks: { color: '#1b5e20' } },
+          y: { ticks: { color: '#1b5e20' } }
+        }
+      }
+    });
+
+    // Fetch data from server
+    async function fetchData() {
+      const response = await fetch('/data');
+      const data = await response.json();
+
+      if (data.temperature !== null && data.humidity !== null) {
+        // Temperature update
+        tempChart.data.labels.push(data.time);
+        tempChart.data.datasets[0].data.push(data.temperature);
+        tempChart.update();
+
+        // Humidity update
+        humChart.data.labels.push(data.time);
+        humChart.data.datasets[0].data.push(data.humidity);
+        humChart.update();
+
+        // Update latest values
+        document.getElementById("temp").innerText = data.temperature + " °C";
+        document.getElementById("hum").innerText = data.humidity + " %";
+      }
+    }
+
+    setInterval(fetchData, 5000); // update every 5 seconds
+  </script>
+</body>
+</html>
