@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import csv
+from datetime import datetime
+import os
+import logging
+
+CSV_FILE = "dht_log.csv"
+LOG_FILE = "server.log"
+HOST = "0.0.0.0"
+PORT = 8000
+
+# ---------------- Logging ----------------
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logging.info("Starting DHT22 server...")
+
+# ---------------- CSV Init ----------------
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["datetime", "temperature", "humidity"])
+    logging.info(f"Created new log file {CSV_FILE}")
+
+def save_sensor_data(temperature, humidity):
+    """บันทึกข้อมูล Temperature + Humidity ลง CSV"""
+    try:
+        with open(CSV_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), temperature, humidity])
+        logging.info(f"Saved data: Temp={temperature}C, Hum={humidity}%")
+    except Exception as e:
+        logging.error(f"Failed to save data: {e}")
+
+def read_csv(filter_date=None):
+    """อ่านข้อมูลจาก CSV"""
+    data = []
+    try:
+        with open(CSV_FILE) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                dt = datetime.strptime(row["datetime"], "%Y-%m-%d %H:%M:%S")
+                if filter_date and dt.date() != filter_date:
+                    continue
+                data.append({
+                    "datetime": dt,
+                    "temperature": float(row["temperature"]),
+                    "humidity": float(row["humidity"])
+                })
+    except Exception as e:
+        logging.error(f"Error reading CSV: {e}")
+    return data
+
+# ---------------- Web Server ----------------
+class DHTRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            date_str = query.get("date", [None])[0]
+            filter_date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else None
+
+            data = read_csv(filter_date)
+
+            # HTML
+            html = """
+            <html>
+            <head>
+                <title>DHT22 Data</title>
+                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                <style>
+                    body { background-color: #d0f0c0; font-family: Arial; }
+                    .latest { font-size: 1.2em; margin-bottom: 20px; }
+                    .container { display: flex; justify-content: space-between; }
+                    .chart { width: 48%; }
+                </style>
+            </head>
+            <body>
+                <h2>DHT22 Real-Time & Historical Data</h2>
+            """
+
+            if data:
+                latest = data[-1]
+                html += f"""
+                <div class="latest">
+                    🌡️ Temperature: <b>{latest['temperature']} °C</b> | 
+                    💧 Humidity: <b>{latest['humidity']}%</b> | 
+                    🕒 {latest['datetime'].strftime('%Y-%m-%d %H:%M:%S')}
+                </div>
+                <div class="container">
+                    <div class="chart" id="temp_chart"></div>
+                    <div class="chart" id="hum_chart"></div>
+                </div>
+                <script>
+                    var times = { [d['datetime'].strftime("%Y-%m-%d %H:%M:%S") for d in data] };
+                    var temps = { [d['temperature'] for d in data] };
+                    var hums = { [d['humidity'] for d in data] };
+
+                    Plotly.newPlot('temp_chart', [{{
+                        x: times, y: temps, type: 'scatter', mode: 'lines+markers',
+                        line: {{color: 'red'}}, name: 'Temperature'
+                    }}], {{title: 'Temperature (°C)'}});
+
+                    Plotly.newPlot('hum_chart', [{{
+                        x: times, y: hums, type: 'scatter', mode: 'lines+markers',
+                        line: {{color: 'blue'}}, name: 'Humidity'
+                    }}], {{title: 'Humidity (%)'}});
+                </script>
+                """
+            else:
+                html += "<p>No data available.</p>"
+
+            html += "</body></html>"
+
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+
+        except Exception as e:
+            logging.error(f"Request failed: {e}")
+            self.send_error(500, "Internal Server Error")
+
+# ---------------- Run Server ----------------
+if __name__ == "__main__":
+    try:
+        server = HTTPServer((HOST, PORT), DHTRequestHandler)
+        logging.info(f"Server running on http://{HOST}:{PORT}")
+        print(f"Server running on http://{HOST}:{PORT}")
+        server.serve_forever()
+    except Exception as e:
+        logging.error(f"Server failed: {e}")
