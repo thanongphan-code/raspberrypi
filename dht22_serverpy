@@ -1,0 +1,35 @@
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+import time
+import adafruit_dht
+import board
+
+HOST = "0.0.0.0"
+PORT = 8000
+
+sensor = adafruit_dht.DHT22(board.D4)
+
+class DHTRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/data":
+            try:
+                temperature_c = sensor.temperature
+                humidity = sensor.humidity
+                data = {"temperature": temperature_c, "humidity": humidity, "time": time.strftime("%H:%M:%S")}
+            except Exception:
+                data = {"temperature": None, "humidity": None, "time": time.strftime("%H:%M:%S")}
+
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        else:
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            with open("index.html", "rb") as f:
+                self.wfile.write(f.read())
+
+server = HTTPServer((HOST, PORT), DHTRequestHandler)
+print(f"Server running on http://{HOST}:{PORT}")
+server.serve_forever()
