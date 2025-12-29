@@ -1,35 +1,211 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
 import time
-import adafruit_dht
+import csv
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 import board
+import adafruit_dht
+import os
+import urllib.parse
 
+# -------------------
+# การตั้งค่า
+# -------------------
+CSV_FILE = "dht22_log.csv"
 HOST = "0.0.0.0"
 PORT = 8000
+SENSOR_PIN = board.D4   # ขา GPIO ที่ต่อ DHT22
 
-sensor = adafruit_dht.DHT22(board.D4)
+# -------------------
+# สร้างไฟล์ CSV ถ้ายังไม่มี
+# -------------------
+if not os.path.exists(CSV_FILE):
+    with open(CSV_FILE, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "temperature", "humidity"])
 
-class DHTRequestHandler(BaseHTTPRequestHandler):
+# -------------------
+# Thread: Logger (เก็บข้อมูล)
+# -------------------
+def log_sensor_data():
+    dhtDevice = adafruit_dht.DHT22(SENSOR_PIN)
+    while True:
+        try:
+            temp = dhtDevice.temperature
+            hum = dhtDevice.humidity
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            if temp is not None and hum is not None:
+                with open(CSV_FILE, mode="a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([timestamp, temp, hum])
+                print(f"{timestamp} 🌡 {temp:.1f}°C 💧 {hum:.1f}%")
+
+        except Exception as e:
+            print("Error:", e)
+
+        time.sleep(10)  # เก็บทุก 10 วินาที
+
+# -------------------
+# Handler: Web Server
+# -------------------
+class DHTRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/data":
+        if self.path.startswith("/data"):
             try:
-                temperature_c = sensor.temperature
-                humidity = sensor.humidity
-                data = {"temperature": temperature_c, "humidity": humidity, "time": time.strftime("%H:%M:%S")}
-            except Exception:
-                data = {"temperature": None, "humidity": None, "time": time.strftime("%H:%M:%S")}
+                query = urllib.parse.urlparse(self.path).query
+                params = urllib.parse.parse_qs(query)
+                date_filter = params.get("date", [None])[0]
 
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
+                with open(CSV_FILE, "r") as f:
+                    lines = f.readlines()
+
+                if date_filter:
+                    # ถ้าเลือกวันเอง ให้กรองข้อมูลวันนั้น
+                    header = lines[0]
+                    rows = [header] + [row for row in lines[1:] if row.startswith(date_filter)]
+                else:
+                    # ถ้าไม่เลือก (หน้าแรก) ให้แสดงเฉพาะวันล่าสุดเท่านั้น
+                    header = lines[0]
+                    if len(lines) > 1:
+                        last_date = lines[-1].split(",")[0].split(" ")[0]
+                        rows = [header] + [row for row in lines[1:] if row.startswith(last_date)]
+                    else:
+                        rows = lines
+
+                data = "".join(rows)
+                self.send_response(200)
+                self.send_header("Content-type", "text/csv")
+                self.end_headers()
+                self.wfile.write(data.encode())
+
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+
         else:
+            # หน้าเว็บหลัก
+            html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>SERVER TUA FL2</title>
+                <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            </head>
+            <body style="background:#ccffcc;color:black;font-family:sans-serif;text-align:center;">
+                <h2 style="margin-top:20px;">SERVER TUA FL2</h2>
+
+                <label for="date">Select Date:</label>
+                <input type="date" id="date" name="date">
+                <button onclick="loadData()">Load</button>
+
+                <div style="display:flex; justify-content: space-around; flex-wrap:wrap; margin-top:20px;">
+                    <div>
+                        <h3>🌡️ Temperature: <span id="temp">--</span>°C</h3>
+                        <canvas id="tempChart" width="400" height="300"></canvas>
+                    </div>
+                    <div>
+                        <h3>💧 Humidity: <span id="hum">--</span>%</h3>
+                        <canvas id="humChart" width="400" height="300"></canvas>
+                    </div>
+                </div>
+
+                <script>
+                    let tempChart, humChart;
+
+                    async function fetchData(date=null) {{
+                        let url = '/data';
+                        if(date) url += '?date=' + date;
+                        const res = await fetch(url);
+                        const text = await res.text();
+                        if(!text.trim()) return {{labels:[], temp:[], hum:[]}};
+                        const rows = text.trim().split('\\n').slice(1); 
+                        let labels=[], temp=[], hum=[];
+                        rows.forEach(r => {{
+                            let [t, te, h] = r.split(',');
+                            labels.push(t);
+                            temp.push(parseFloat(te));
+                            hum.push(parseFloat(h));
+                        }});
+                        return {{labels, temp, hum}};
+                    }}
+
+                    async function renderCharts(date=null) {{
+                        const data = await fetchData(date);
+
+                        if(data.temp.length>0){{
+                            document.getElementById('temp').innerText = data.temp[data.temp.length-1].toFixed(1);
+                            document.getElementById('hum').innerText = data.hum[data.hum.length-1].toFixed(1);
+                        }}
+
+                        const ctxTemp = document.getElementById('tempChart').getContext('2d');
+                        if(tempChart) tempChart.destroy();
+                        tempChart = new Chart(ctxTemp, {{
+                            type:'line',
+                            data: {{
+                                labels: data.labels,
+                                datasets: [{{
+                                    label:'🌡 Temp (°C)',
+                                    data: data.temp,
+                                    borderColor:'red',
+                                    fill:false
+                                }}]
+                            }},
+                            options: {{
+                                responsive:true,
+                                scales: {{
+                                    y: {{ title: {{ display:true, text:'Temperature (°C)' }} }}
+                                }}
+                            }}
+                        }});
+
+                        const ctxHum = document.getElementById('humChart').getContext('2d');
+                        if(humChart) humChart.destroy();
+                        humChart = new Chart(ctxHum, {{
+                            type:'line',
+                            data: {{
+                                labels: data.labels,
+                                datasets: [{{
+                                    label:'💧 Humidity (%)',
+                                    data: data.hum,
+                                    borderColor:'blue',
+                                    fill:false
+                                }}]
+                            }},
+                            options: {{
+                                responsive:true,
+                                scales: {{
+                                    y: {{ title: {{ display:true, text:'Humidity (%)' }} }}
+                                }}
+                            }}
+                        }});
+                    }}
+
+                    function loadData() {{
+                        let date = document.getElementById('date').value;
+                        renderCharts(date);
+                    }}
+
+                    renderCharts();
+                    setInterval(() => {{
+                        let date = document.getElementById('date').value;
+                        if(!date) renderCharts();
+                    }},10000);
+                </script>
+            </body>
+            </html>
+            """
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            with open("index.html", "rb") as f:
-                self.wfile.write(f.read())
+            self.wfile.write(html.encode())
 
-server = HTTPServer((HOST, PORT), DHTRequestHandler)
-print(f"Server running on http://{HOST}:{PORT}")
-server.serve_forever()
+# -------------------
+# Main
+# -------------------
+if __name__ == "__main__":
+    threading.Thread(target=log_sensor_data, daemon=True).start()
+    server = HTTPServer((HOST, PORT), DHTRequestHandler)
+    print(f"Server running at http://{HOST}:{PORT}")
+    server.serve_forever()
