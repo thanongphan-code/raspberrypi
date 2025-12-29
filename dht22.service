@@ -1,0 +1,13 @@
+[Unit]
+Description=DHT22 Sensor Web Server
+After=network.target
+
+[Service]
+User=admin
+WorkingDirectory=/home/admin/Desktop
+ExecStart=/usr/bin/python3 /home/admin/Desktop/dht22_server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
